@@ -1,0 +1,15 @@
+rg="rg-acajobdemo"
+location="northeurope"
+env="env-acajobdemo"
+jobname="job-timer"
+
+az containerapp job create --name $jobname --resource-group $rg --environment $env \
+--image "mcr.microsoft.com/k8se/quickstart-jobs:latest" --cpu "0.25" --memory "0.5Gi" \
+--trigger-type "Schedule" --cron-expression "0 */1 * * *" \
+--replica-timeout 1800 --replica-retry-limit 1 --replica-completion-count 1 --parallelism 1
+
+az containerapp job execution list --name "$jobname" --resource-group "$rg" \
+    --output table \
+    --query '[].{Status: properties.status, Name: name, StartTime: properties.startTime}'
+
+az containerapp job list --resource-group $rg --output table

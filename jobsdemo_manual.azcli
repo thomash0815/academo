@@ -1,0 +1,57 @@
+az account show #logged in correct?
+az account set --subscription "<id>" #set subscription
+az login #login if not
+
+az upgrade #cli update
+
+#register providers
+az provider register --namespace Microsoft.App 
+az provider register --namespace Microsoft.OperationalInsights
+
+#or query them
+az provider show -n Microsoft.App
+az provider show -n Microsoft.OperationalInsights
+
+#install extensions
+az extension add --name containerapp --upgrade
+az extension add --name log-analytics --upgrade #optional, for the log querys
+
+rg="rg-acajobdemo"
+location="northeurope"
+env="env-acajobdemo"
+jobname="job-manual"
+
+az group create -n $rg -l $location
+
+az containerapp env create --name $env --resource-group $rg --location $location
+
+az containerapp job create --name $jobname --resource-group $rg --environment $env \
+--image "mcr.microsoft.com/k8se/quickstart-jobs:latest" --cpu "0.25" --memory "0.5Gi" \
+--trigger-type "Manual" \
+--replica-timeout 60 --replica-retry-limit 1 --replica-completion-count 1 --parallelism 1
+
+az containerapp job start --name "$jobname" --resource-group "$rg"
+
+az containerapp job execution list --name "$jobname" --resource-group "$rg" \
+    --output table \
+    --query '[].{Status: properties.status, Name: name, StartTime: properties.startTime}'
+
+
+LOG_ANALYTICS_WORKSPACE_ID=`az containerapp env show \
+    --name "$env" \
+    --resource-group "$rg" \
+    --query "properties.appLogsConfiguration.logAnalyticsConfiguration.customerId" \
+    --output tsv`
+
+JOB_EXECUTION_NAME=`az containerapp job execution list \
+    --name "$jobname" \
+    --resource-group "$rg" \
+    --query "[0].name" \
+    --output tsv`
+
+echo $JOB_EXECUTION_NAME
+
+az monitor log-analytics query \
+    --workspace "$LOG_ANALYTICS_WORKSPACE_ID" \
+    --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s startswith '$JOB_EXECUTION_NAME' | order by _timestamp_d asc" \
+    --query "[].Log_s"

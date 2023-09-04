@@ -1,0 +1,72 @@
+storagename="myultrauniquesto"
+queuename="queue1"
+rg="rg-acajobdemo"
+location="northeurope"
+env="env-acajobdemo"
+jobname="job-event-sto"
+
+# Create a storage account
+az storage account create \
+    --name $storagename \
+    --resource-group $rg \
+    --location $location \
+    --sku Standard_LRS
+
+
+# Create a queue
+az storage queue create \
+    --name $queuename \
+    --account-name $storagename \
+    --account-key $(az storage account keys list --account-name $storagename --resource-group $rg --query "[0].value" -o tsv)
+
+# az storage account keys list --account-name $storagename --resource-group $rg --query "[0].value" -o tsv
+
+# QUEUE_CONNECTION_STRING=`az storage account show-connection-string -g $rg --name $storagename --query connectionString --output tsv`
+
+# az storage queue create --name $queuename --account-name $storagename --connection-string "$QUEUE_CONNECTION_STRING"
+
+image="queue-reader-job:1.0"
+acrname="mytestacr0815"
+
+# Create a container registry
+
+az acr create --resource-group $rg --name $acrname --sku Basic --admin-enabled true
+
+#build image
+az acr build --registry $acrname --image $image https://github.com/Azure-Samples/container-apps-event-driven-jobs-tutorial.git
+
+queueconstr=`az storage account show-connection-string -g $rg --name $storagename --query connectionString --output tsv`
+
+az containerapp job create \
+    --name "$jobname" \
+    --resource-group "$rg" \
+    --environment "$env" \
+    --trigger-type "Event" \
+    --replica-timeout "1800" \
+    --replica-retry-limit "1" \
+    --replica-completion-count "1" \
+    --parallelism "1" \
+    --min-executions "0" \
+    --max-executions "10" \
+    --polling-interval "60" \
+    --scale-rule-name "queue" \
+    --scale-rule-type "azure-queue" \
+    --scale-rule-metadata "accountName=$storagename" "queueName=$queuename" "queueLength=1" \
+    --scale-rule-auth "connection=connection-string-secret" \
+    --image "$acrname.azurecr.io/$image" \
+    --cpu "0.5" \
+    --memory "1Gi" \
+    --secrets "connection-string-secret=$queueconstr" \
+    --registry-server "$acrname.azurecr.io" \
+    --env-vars "AZURE_STORAGE_QUEUE_NAME=$queuename" "AZURE_STORAGE_CONNECTION_STRING=secretref:connection-string-secret"
+
+# put a message in the queue
+az storage message put --queue-name $queuename --content "Hello world" --account-name $storagename --connection-string "$queueconstr"
+
+# list job executions
+az containerapp job execution list --name $jobname --resource-group $rg --output table
+
+#query log analytics workspace id
+LOG_ANALYTICS_WORKSPACE_ID=`az containerapp env show --name $env --resource-group $rg --query properties.appLogsConfiguration.logAnalyticsConfiguration.customerId --out tsv`
+
+az monitor log-analytics query --workspace "$LOG_ANALYTICS_WORKSPACE_ID" --analytics-query "ContainerAppConsoleLogs_CL | where ContainerJobName_s == 'job-event-sto'"
